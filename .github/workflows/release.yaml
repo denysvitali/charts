@@ -132,7 +132,7 @@ jobs:
       - name: Create GitHub releases
         if: steps.detect.outputs.any_releasable == 'true'
         env:
-          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CHARTS: ${{ steps.detect.outputs.charts }}
         run: |
           OWNER=$(echo "${{ github.repository }}" | cut -d/ -f1)
