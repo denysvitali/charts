@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "charts/**"
+  workflow_dispatch:
 
 jobs:
   release:
@@ -13,11 +14,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      CR_VERSION: "1.6.1"
+      GIT_CLIFF_VERSION: "2.7.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required: chart-releaser compares against tags
+          fetch-depth: 0  # Full history needed for git-cliff and tag comparison
 
       - name: Configure Git
         run: |
@@ -29,20 +33,156 @@ jobs:
         with:
           version: v3.17.0
 
-      - name: Update chart dependencies
+      - name: Install chart-releaser (cr)
         run: |
-          for chart in charts/*/; do
-            if [ -f "$chart/Chart.yaml" ]; then
-              echo "Updating dependencies for $chart..."
-              helm dependency update "$chart" 2>/dev/null || true
+          curl -sSLo /tmp/cr.tar.gz \
+            "https://github.com/helm/chart-releaser/releases/download/v${CR_VERSION}/chart-releaser_${CR_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/cr.tar.gz -C /tmp cr
+          sudo mv /tmp/cr /usr/local/bin/cr
+          cr version
+
+      - name: Install git-cliff
+        run: |
+          curl -sSLo /tmp/git-cliff.tar.gz \
+            "https://github.com/orhun/git-cliff/releases/download/v${GIT_CLIFF_VERSION}/git-cliff-${GIT_CLIFF_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -xzf /tmp/git-cliff.tar.gz -C /tmp --strip-components=1 \
+            "git-cliff-${GIT_CLIFF_VERSION}/git-cliff"
+          sudo mv /tmp/git-cliff /usr/local/bin/git-cliff
+          git-cliff --version
+
+      - name: Detect releasable charts
+        id: detect
+        run: |
+          RELEASABLE=""
+          for chart_dir in charts/*/; do
+            chart_yaml="$chart_dir/Chart.yaml"
+            [ -f "$chart_yaml" ] || continue
+
+            chart_name=$(yq e '.name' "$chart_yaml")
+            chart_version=$(yq e '.version' "$chart_yaml")
+            tag="${chart_name}-${chart_version}"
+
+            if git rev-parse "$tag" >/dev/null 2>&1; then
+              echo "Tag $tag already exists — skipping $chart_name"
+            else
+              echo "New release detected: $tag"
+              RELEASABLE="$RELEASABLE $chart_name"
             fi
           done
 
-      - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.7.0
-        with:
-          charts_dir: charts
-          skip_existing: true
-          config: cr.yaml
+          RELEASABLE=$(echo "$RELEASABLE" | xargs)
+          if [ -z "$RELEASABLE" ]; then
+            echo "No charts to release."
+            echo "any_releasable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Charts to release: $RELEASABLE"
+            echo "any_releasable=true" >> "$GITHUB_OUTPUT"
+            echo "charts=$RELEASABLE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package charts and generate changelogs
+        if: steps.detect.outputs.any_releasable == 'true'
         env:
-          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          CHARTS: ${{ steps.detect.outputs.charts }}
+        run: |
+          mkdir -p .cr-release-packages
+          mkdir -p /tmp/changelogs
+
+          for chart_name in $CHARTS; do
+            chart_dir="charts/$chart_name"
+            chart_version=$(yq e '.version' "$chart_dir/Chart.yaml")
+            tag="${chart_name}-${chart_version}"
+
+            echo "::group::Package $chart_name ($chart_version)"
+
+            # Update dependencies
+            helm dependency update "$chart_dir" 2>/dev/null || true
+
+            # Package chart
+            helm package "$chart_dir" --destination .cr-release-packages/
+            echo "::endgroup::"
+
+            echo "::group::Generate changelog for $chart_name"
+
+            # Find the previous tag for this chart
+            PREV_TAG=$(git tag -l "${chart_name}-*" --sort=-v:refname | head -n 1)
+
+            # Generate changelog with git-cliff scoped to the chart's directory
+            CLIFF_ARGS=(
+              --config cliff.toml
+              --include-path "charts/${chart_name}/**"
+              --strip header
+            )
+
+            if [ -n "$PREV_TAG" ]; then
+              echo "Generating changelog from $PREV_TAG to HEAD"
+              CLIFF_ARGS+=(--tag "$tag" "$PREV_TAG..HEAD")
+            else
+              echo "No previous tag found — generating full changelog"
+              CLIFF_ARGS+=(--tag "$tag")
+            fi
+
+            git-cliff "${CLIFF_ARGS[@]}" > "/tmp/changelogs/${chart_name}.md" 2>/dev/null || true
+
+            # If changelog is empty, add a default message
+            if [ ! -s "/tmp/changelogs/${chart_name}.md" ]; then
+              echo "Release ${chart_name} ${chart_version}" > "/tmp/changelogs/${chart_name}.md"
+            fi
+
+            echo "--- Changelog for $chart_name ---"
+            cat "/tmp/changelogs/${chart_name}.md"
+            echo "::endgroup::"
+          done
+
+      - name: Create GitHub releases
+        if: steps.detect.outputs.any_releasable == 'true'
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHARTS: ${{ steps.detect.outputs.charts }}
+        run: |
+          OWNER=$(echo "${{ github.repository }}" | cut -d/ -f1)
+          REPO=$(echo "${{ github.repository }}" | cut -d/ -f2)
+
+          for chart_name in $CHARTS; do
+            chart_version=$(yq e '.version' "charts/$chart_name/Chart.yaml")
+            tag="${chart_name}-${chart_version}"
+            changelog="/tmp/changelogs/${chart_name}.md"
+            package=$(ls .cr-release-packages/${chart_name}-${chart_version}.tgz 2>/dev/null)
+
+            if [ -z "$package" ]; then
+              echo "ERROR: Package not found for $chart_name-$chart_version"
+              continue
+            fi
+
+            echo "::group::Release $tag"
+
+            # Create the git tag
+            git tag "$tag"
+            git push origin "$tag"
+
+            # Create GitHub release with changelog body
+            gh release create "$tag" \
+              "$package" \
+              --title "$tag" \
+              --notes-file "$changelog" \
+              --repo "${{ github.repository }}"
+
+            echo "::endgroup::"
+          done
+
+      - name: Update Helm repo index on gh-pages
+        if: steps.detect.outputs.any_releasable == 'true'
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER=$(echo "${{ github.repository }}" | cut -d/ -f1)
+          REPO=$(echo "${{ github.repository }}" | cut -d/ -f2)
+
+          cr index \
+            --owner "$OWNER" \
+            --git-repo "$REPO" \
+            --charts-repo "https://${OWNER}.github.io/${REPO}" \
+            --pages-branch gh-pages \
+            --package-path .cr-release-packages \
+            --index-path .cr-index/index.yaml \
+            --push
