@@ -1,0 +1,16 @@
+# Values used by chart-testing (ct install) for integration tests
+# These are minimal values sufficient to render and install the chart
+
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: "1.25-alpine"
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi

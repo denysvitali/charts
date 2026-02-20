@@ -1,0 +1,234 @@
+name: Chart Template Diff
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "charts/**"
+      - ".github/workflows/pr-diff.yaml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  DYFF_VERSION: "v1.10.0"
+
+jobs:
+  diff:
+    name: Render and Diff Chart Templates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Cache dyff binary
+        id: cache-dyff
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/dyff
+          key: dyff-${{ runner.os }}-${{ env.DYFF_VERSION }}
+
+      - name: Install dyff
+        if: steps.cache-dyff.outputs.cache-hit != 'true'
+        run: |
+          curl -sSLo /tmp/dyff.tar.gz \
+            "https://github.com/homeport/dyff/releases/download/${{ env.DYFF_VERSION }}/dyff_linux_amd64.tar.gz"
+          tar -xzf /tmp/dyff.tar.gz -C /tmp dyff
+          sudo mv /tmp/dyff /usr/local/bin/dyff
+          sudo chmod +x /usr/local/bin/dyff
+          dyff version
+
+      - name: Detect changed charts
+        id: changed
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" \
+            | grep '^charts/' \
+            | awk -F/ '{print $2}' \
+            | sort -u \
+            | tr '\n' ' ' \
+            | sed 's/ $//')
+
+          if [ -z "$CHANGED" ]; then
+            echo "No chart changes detected."
+            echo "any_changed=false" >> "$GITHUB_OUTPUT"
+            echo "charts_list=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed charts: $CHANGED"
+            echo "any_changed=true" >> "$GITHUB_OUTPUT"
+            echo "charts_list=$CHANGED" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update chart dependencies
+        if: steps.changed.outputs.any_changed == 'true'
+        run: |
+          for chart in charts/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              helm dependency update "$chart" 2>/dev/null || true
+            fi
+          done
+
+      - name: Generate template diffs
+        if: steps.changed.outputs.any_changed == 'true'
+        id: generate-diff
+        run: |
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          REPORT_FILE="/tmp/diff_report.md"
+
+          cat > "$REPORT_FILE" <<'HEADER'
+          <!-- helm-diff-comment -->
+          ## Helm Template Diff
+
+          Rendered template differences for changed charts in this PR, produced with [dyff](https://github.com/homeport/dyff).
+
+          HEADER
+
+          CHARTS="${{ steps.changed.outputs.charts_list }}"
+
+          for chart_name in $CHARTS; do
+            chart_path="charts/$chart_name"
+
+            printf '\n---\n\n### `%s`\n' "$chart_name" >> "$REPORT_FILE"
+
+            # ── Collect values overlays present on HEAD ───────────────────────
+            head_base_values=""
+            [ -f "$chart_path/values.yaml" ] && head_base_values="$chart_path/values.yaml"
+
+            head_overlays=()
+            for ov in "$chart_path"/values.*.yaml; do
+              [ -f "$ov" ] && head_overlays+=("$ov")
+            done
+
+            # envs: "default" always first, then one per overlay file
+            envs=("default")
+            for ov in "${head_overlays[@]}"; do
+              env_name=$(basename "$ov" .yaml | sed 's/^values\.//')
+              envs+=("$env_name")
+            done
+
+            # ── Extract BASE version of the chart ─────────────────────────────
+            BASE_CHART_DIR="/tmp/base_charts/$chart_name"
+            rm -rf "$BASE_CHART_DIR"
+            mkdir -p "$BASE_CHART_DIR"
+            BASE_EXISTS=false
+
+            base_files=$(git ls-tree -r --name-only "$BASE_SHA" -- "$chart_path" 2>/dev/null || true)
+            if [ -n "$base_files" ]; then
+              BASE_EXISTS=true
+              while IFS= read -r f; do
+                target="$BASE_CHART_DIR/${f#charts/$chart_name/}"
+                mkdir -p "$(dirname "$target")"
+                git show "$BASE_SHA:$f" > "$target" 2>/dev/null || true
+              done <<< "$base_files"
+              helm dependency update "$BASE_CHART_DIR" 2>/dev/null || true
+            fi
+
+            # ── Render HEAD and BASE, then dyff ───────────────────────────────
+            for env in "${envs[@]}"; do
+              [ ${#envs[@]} -gt 1 ] && printf '\n#### Values: `%s`\n' "$env" >> "$REPORT_FILE"
+
+              # HEAD flags
+              head_flags=()
+              [ -n "$head_base_values" ] && head_flags+=("-f" "$head_base_values")
+              if [ "$env" != "default" ]; then
+                ov_path="$chart_path/values.$env.yaml"
+                [ -f "$ov_path" ] && head_flags+=("-f" "$ov_path")
+              fi
+
+              # BASE flags
+              base_flags=()
+              if $BASE_EXISTS; then
+                [ -f "$BASE_CHART_DIR/values.yaml" ] && base_flags+=("-f" "$BASE_CHART_DIR/values.yaml")
+                if [ "$env" != "default" ]; then
+                  base_ov="$BASE_CHART_DIR/values.$env.yaml"
+                  [ -f "$base_ov" ] && base_flags+=("-f" "$base_ov")
+                fi
+              fi
+
+              # Render HEAD
+              helm template "$chart_name" "$chart_path" "${head_flags[@]}" \
+                > /tmp/diff_head.yaml 2>&1 \
+                || echo "# ERROR: helm template failed for HEAD" > /tmp/diff_head.yaml
+
+              # Render BASE (empty file for new charts)
+              if $BASE_EXISTS; then
+                helm template "$chart_name" "$BASE_CHART_DIR" "${base_flags[@]}" \
+                  > /tmp/diff_base.yaml 2>&1 \
+                  || echo "" > /tmp/diff_base.yaml
+              else
+                echo "" > /tmp/diff_base.yaml
+              fi
+
+              # Run dyff between base and head
+              DYFF_OUT="/tmp/dyff_${chart_name}_${env}.md"
+              if dyff between \
+                  --output github \
+                  --no-banner \
+                  --omit-header \
+                  --set-exit-code \
+                  /tmp/diff_base.yaml \
+                  /tmp/diff_head.yaml \
+                  > "$DYFF_OUT" 2>&1; then
+                # Exit 0 = no differences
+                printf '\n_No rendered template changes for `%s` values._\n' "$env" >> "$REPORT_FILE"
+              else
+                # Exit non-0 = differences found; append dyff output
+                printf '\n' >> "$REPORT_FILE"
+                cat "$DYFF_OUT" >> "$REPORT_FILE"
+              fi
+            done
+          done
+
+          printf '\n---\n_Generated by the [Chart Template Diff](%s/%s/actions/runs/%s) workflow._\n' \
+            "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" \
+            >> "$REPORT_FILE"
+
+      - name: Find existing diff comment
+        if: steps.changed.outputs.any_changed == 'true'
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- helm-diff-comment -->"
+
+      - name: Create or update diff comment
+        if: steps.changed.outputs.any_changed == 'true'
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body-path: /tmp/diff_report.md
+          edit-mode: replace
+
+      - name: Find stale diff comment (no chart changes)
+        if: steps.changed.outputs.any_changed == 'false'
+        uses: peter-evans/find-comment@v3
+        id: fc-stale
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: "github-actions[bot]"
+          body-includes: "<!-- helm-diff-comment -->"
+
+      - name: Update stale comment to reflect no changes
+        if: steps.changed.outputs.any_changed == 'false' && steps.fc-stale.outputs.comment-id != ''
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc-stale.outputs.comment-id }}
+          body: |
+            <!-- helm-diff-comment -->
+            ## Helm Template Diff
+
+            No chart template changes detected in this PR.
+          edit-mode: replace

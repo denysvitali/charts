@@ -1,0 +1,19 @@
+# Development environment overrides
+replicaCount: 1
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: example-app.dev.local
+      paths:
+        - path: /
+          pathType: Prefix

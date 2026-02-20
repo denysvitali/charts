@@ -1,0 +1,296 @@
+name: Lint and Validate Charts
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "charts/**"
+      - "ct.yaml"
+      - ".yamllint.yaml"
+      - ".kube-linter.yaml"
+      - ".github/workflows/lint.yaml"
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: read
+
+env:
+  KUBECONFORM_VERSION: "v0.7.0"
+  KUBERNETES_VERSION: "1.29.0"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Detect changed charts (shared across jobs via outputs)
+  # ─────────────────────────────────────────────────────────────────────────────
+  detect-changes:
+    name: Detect Changed Charts
+    runs-on: ubuntu-latest
+    outputs:
+      any_changed: ${{ steps.changed.outputs.any_changed }}
+      charts_list: ${{ steps.changed.outputs.charts_list }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed charts
+        id: changed
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.sha }}"
+
+          CHANGED=$(git diff --name-only "$BASE" "$HEAD" \
+            | grep '^charts/' \
+            | awk -F/ '{print $2}' \
+            | sort -u \
+            | tr '\n' ' ' \
+            | sed 's/ $//')
+
+          if [ -z "$CHANGED" ]; then
+            echo "No chart changes detected."
+            echo "any_changed=false" >> "$GITHUB_OUTPUT"
+            echo "charts_list=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changed charts: $CHANGED"
+            echo "any_changed=true" >> "$GITHUB_OUTPUT"
+            echo "charts_list=$CHANGED" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # helm lint + chart-testing (ct lint = yamllint + yamale + helm lint)
+  # ─────────────────────────────────────────────────────────────────────────────
+  helm-lint:
+    name: Helm Lint
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Set up Python (required by chart-testing)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.8.0
+
+      - name: Update chart dependencies
+        run: |
+          for chart in charts/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              helm dependency update "$chart" 2>/dev/null || true
+            fi
+          done
+
+      - name: helm lint (strict, all changed charts + values overlays)
+        run: |
+          FAILED=0
+          for chart_name in ${{ needs.detect-changes.outputs.charts_list }}; do
+            chart="charts/$chart_name"
+            if [ ! -d "$chart" ]; then
+              echo "Chart $chart_name was deleted — skipping lint."
+              continue
+            fi
+
+            echo "::group::helm lint: $chart_name (default values)"
+            helm lint "$chart" --strict --with-subcharts || FAILED=1
+            echo "::endgroup::"
+
+            # Lint with each environment overlay
+            for vf in "$chart"/values.*.yaml; do
+              [ -f "$vf" ] || continue
+              env_name=$(basename "$vf" .yaml | sed 's/^values\.//')
+              echo "::group::helm lint: $chart_name (overlay: $env_name)"
+              helm lint "$chart" --strict --with-subcharts \
+                -f "$chart/values.yaml" \
+                -f "$vf" || FAILED=1
+              echo "::endgroup::"
+            done
+          done
+          exit $FAILED
+
+      - name: ct lint (yamllint + yamale validation)
+        run: |
+          ct lint \
+            --target-branch "${{ github.event.repository.default_branch }}" \
+            --config ct.yaml
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # kubeconform — validate rendered templates against k8s JSON schemas
+  # ─────────────────────────────────────────────────────────────────────────────
+  kubeconform:
+    name: kubeconform Schema Validation
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any_changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Cache kubeconform binary
+        id: cache-kubeconform
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/kubeconform
+          key: kubeconform-${{ runner.os }}-${{ env.KUBECONFORM_VERSION }}
+
+      - name: Install kubeconform
+        if: steps.cache-kubeconform.outputs.cache-hit != 'true'
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${{ env.KUBECONFORM_VERSION }}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo mv /tmp/kubeconform /usr/local/bin/kubeconform
+          sudo chmod +x /usr/local/bin/kubeconform
+          kubeconform -v
+
+      - name: Update chart dependencies
+        run: |
+          for chart in charts/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              helm dependency update "$chart" 2>/dev/null || true
+            fi
+          done
+
+      - name: Validate rendered templates with kubeconform
+        run: |
+          CRDS_URL="https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+          FAILED=0
+
+          for chart_name in ${{ needs.detect-changes.outputs.charts_list }}; do
+            chart="charts/$chart_name"
+            if [ ! -d "$chart" ]; then
+              echo "Chart $chart_name was deleted — skipping."
+              continue
+            fi
+
+            # Validate with default values
+            if [ -f "$chart/values.yaml" ]; then
+              echo "::group::kubeconform: $chart_name (default)"
+              helm template "$chart_name" "$chart" -f "$chart/values.yaml" \
+                | kubeconform \
+                    -strict \
+                    -ignore-missing-schemas \
+                    -kubernetes-version "${{ env.KUBERNETES_VERSION }}" \
+                    -schema-location default \
+                    -schema-location "$CRDS_URL" \
+                    -summary \
+                    -output pretty \
+                || FAILED=1
+              echo "::endgroup::"
+            fi
+
+            # Validate with each overlay (base values + overlay)
+            for vf in "$chart"/values.*.yaml; do
+              [ -f "$vf" ] || continue
+              env_label=$(basename "$vf" .yaml | sed 's/^values\.//')
+              echo "::group::kubeconform: $chart_name (overlay: $env_label)"
+              helm template "$chart_name" "$chart" \
+                -f "$chart/values.yaml" \
+                -f "$vf" \
+                | kubeconform \
+                    -strict \
+                    -ignore-missing-schemas \
+                    -kubernetes-version "${{ env.KUBERNETES_VERSION }}" \
+                    -schema-location default \
+                    -schema-location "$CRDS_URL" \
+                    -summary \
+                    -output pretty \
+                || FAILED=1
+              echo "::endgroup::"
+            done
+          done
+
+          exit $FAILED
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # kube-linter — static security analysis
+  # ─────────────────────────────────────────────────────────────────────────────
+  kube-linter:
+    name: kube-linter Security Analysis
+    needs: detect-changes
+    if: needs.detect-changes.outputs.any_changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Update chart dependencies
+        run: |
+          for chart in charts/*/; do
+            if [ -f "$chart/Chart.yaml" ]; then
+              helm dependency update "$chart" 2>/dev/null || true
+            fi
+          done
+
+      - name: Render templates for analysis
+        run: |
+          mkdir -p /tmp/rendered
+          for chart_name in ${{ needs.detect-changes.outputs.charts_list }}; do
+            chart="charts/$chart_name"
+            if [ ! -d "$chart" ]; then
+              echo "Chart $chart_name was deleted — skipping."
+              continue
+            fi
+            echo "Rendering $chart_name..."
+            helm template "$chart_name" "$chart" \
+              -f "$chart/values.yaml" \
+              --output-dir "/tmp/rendered/$chart_name" \
+              2>&1 || echo "Warning: helm template failed for $chart_name"
+          done
+
+      - name: Create results directory
+        run: mkdir -p /tmp/results
+
+      - name: Run kube-linter
+        uses: stackrox/kube-linter-action@v1.0.4
+        id: kube-linter
+        with:
+          directory: /tmp/rendered
+          config: .kube-linter.yaml
+          format: sarif
+          output-file: /tmp/results/kube-linter.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: /tmp/results/kube-linter.sarif
+        continue-on-error: true  # SARIF upload requires code scanning to be enabled
+
+      - name: Fail if kube-linter found issues
+        run: |
+          if [[ "${{ steps.kube-linter.outcome }}" != "success" ]]; then
+            echo "kube-linter found issues. Check the Security tab for details."
+            exit 1
+          fi

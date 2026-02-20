@@ -1,0 +1,5 @@
+# chart-releaser configuration
+# https://github.com/helm/chart-releaser
+skip-existing: true
+# pages-branch: gh-pages   # default
+# packages-with-index: false

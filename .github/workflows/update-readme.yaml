@@ -1,0 +1,73 @@
+name: Update README Chart Index
+
+on:
+  release:
+    types:
+      - published
+
+jobs:
+  update-index:
+    name: Update Chart Table in README
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.0
+
+      - name: Generate chart list
+        id: charts
+        run: |
+          TABLE="| Chart | Description | Version |\n|-------|-------------|---------|"
+
+          for chart_yaml in charts/*/Chart.yaml; do
+            [ -f "$chart_yaml" ] || continue
+            name=$(grep '^name:' "$chart_yaml" | awk '{print $2}' | tr -d '"')
+            description=$(grep '^description:' "$chart_yaml" | sed 's/^description: //' | tr -d '"')
+            version=$(grep '^version:' "$chart_yaml" | awk '{print $2}' | tr -d '"')
+            TABLE="$TABLE\n| \`$name\` | $description | $version |"
+          done
+
+          echo "table<<EOF" >> "$GITHUB_OUTPUT"
+          echo -e "$TABLE" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Update README
+        run: |
+          # Replace the chart table between the header markers
+          python3 - <<'PYEOF'
+          import re, pathlib
+
+          readme = pathlib.Path("README.md").read_text()
+
+          # Replace content between "## Available Charts" and the next "##" section
+          new_table = """${{ steps.charts.outputs.table }}"""
+
+          pattern = r'(## Available Charts\n\n)(\|.*?\n)*'
+          replacement = r'\g<1>' + new_table + '\n\n'
+
+          updated = re.sub(pattern, replacement, readme, flags=re.DOTALL)
+          pathlib.Path("README.md").write_text(updated)
+          print("README updated.")
+          PYEOF
+
+      - name: Commit updated README
+        run: |
+          if git diff --quiet README.md; then
+            echo "README unchanged, nothing to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add README.md
+            git commit -m "docs: update chart index in README [skip ci]"
+            git push origin main
+          fi

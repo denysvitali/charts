@@ -1,0 +1,13 @@
+# kube-linter configuration
+# https://docs.kubelinter.io/#/configuring-kubelinter
+checks:
+  # Use the built-in default checks as a base
+  doNotAutoAddDefaults: false
+  # Extra checks beyond the defaults
+  add:
+    - "no-anti-affinity"
+    - "privilege-escalation-container"
+  # Checks to suppress (adjust per your environment)
+  ignore:
+    - "unset-cpu-requirements"
+    - "unset-memory-requirements"

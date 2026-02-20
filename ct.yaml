@@ -1,0 +1,7 @@
+# chart-testing (ct) configuration
+chart-dirs:
+  - charts
+validate-maintainers: false
+target-branch: main
+lint-conf: .yamllint.yaml
+helm-extra-args: "--timeout 600s"
