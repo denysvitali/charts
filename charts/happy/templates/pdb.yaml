@@ -1,0 +1,20 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "happy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "happy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+{{- end }}

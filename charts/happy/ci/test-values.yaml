@@ -1,0 +1,27 @@
+# Values used by chart-testing (ct install) for CI linting
+# Minimal values with optional components disabled
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/denysvitali/happy-server
+  tag: "main"
+
+postgres:
+  enabled: false
+
+redis:
+  enabled: false
+
+ui:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+# Provide a master secret directly for CI
+handyMasterSecret: "ci-test-secret"
+
+# Use an external database URL for CI
+externalDatabase:
+  url: "postgresql://user:pass@localhost:5432/happy"

@@ -1,0 +1,32 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "happy.fullname" . }}-postgres
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.postgres.instances }}
+  primaryUpdateStrategy: unsupervised
+
+  storage:
+    {{- if .Values.postgres.storageClass }}
+    storageClass: {{ .Values.postgres.storageClass }}
+    {{- end }}
+    size: {{ .Values.postgres.storageSize }}
+
+  postgresql:
+    parameters:
+      shared_buffers: "128MB"
+      max_connections: "50"
+
+  enableSuperuserAccess: true
+
+  bootstrap:
+    initdb:
+      database: happy
+      owner: app
+
+  monitoring:
+    enablePodMonitor: true
+{{- end }}

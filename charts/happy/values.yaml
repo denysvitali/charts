@@ -1,0 +1,167 @@
+# Happy Server Helm Chart
+# https://github.com/denysvitali/happy-server
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/denysvitali/happy-server
+  # -- Overrides the image tag whose default is the chart appVersion
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # runAsNonRoot: true
+  # fsGroup: 1000
+
+securityContext: {}
+  # allowPrivilegeEscalation: false
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+  # capabilities:
+  #   drop:
+  #     - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: happy.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    memory: 128Mi
+    cpu: 100m
+  limits:
+    memory: 512Mi
+
+# -- Additional environment variables
+extraEnv: []
+# - name: MY_VAR
+#   value: "my-value"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# =============================================================================
+# Database Configuration
+# =============================================================================
+
+# -- Use built-in PostgreSQL (CloudNativePG)
+# Set to false to use an external database
+postgres:
+  enabled: true
+  instances: 1
+  storageClass: "" # Uses default if empty
+  storageSize: 10Gi
+
+# -- External database URL (used when postgres.enabled=false)
+# Can also be provided via existingSecret
+externalDatabase:
+  url: ""
+
+# =============================================================================
+# Redis Configuration
+# =============================================================================
+
+redis:
+  # -- Deploy Redis alongside happy-server
+  enabled: true
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+
+  # -- Use external Redis instead of built-in
+  # Set redis.enabled=false and provide externalUrl
+  externalUrl: ""
+
+# =============================================================================
+# S3 Storage Configuration
+# =============================================================================
+
+s3:
+  # -- S3-compatible storage endpoint (without protocol)
+  host: ""
+  port: "443"
+  useSSL: "true"
+  bucket: ""
+  # -- Public URL for the bucket (for generating public links)
+  publicURL: ""
+  # -- Credentials (if not using existingSecret)
+  accessKey: ""
+  secretKey: ""
+
+# =============================================================================
+# Secrets Configuration
+# =============================================================================
+
+# -- Master secret for encryption
+handyMasterSecret: ""
+
+# -- Use an existing secret instead of creating one
+# The secret should contain: handy_master_secret, s3_access_key, s3_secret_key
+existingSecret: ""
+
+# -- External Secrets Operator integration
+externalSecret:
+  enabled: false
+  refreshInterval: "1h"
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  # -- Remote path in the secret store
+  remotePath: ""
+
+# -- Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  # Use maxUnavailable for single-replica deployments
+  # minAvailable: 1  # Use for multi-replica
+  maxUnavailable: 1
+
+# =============================================================================
+# UI Configuration
+# =============================================================================
+
+ui:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/denysvitali/happy
+    tag: main
+    pullPolicy: Always
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      memory: 64Mi
+      cpu: 50m
+    limits:
+      memory: 128Mi
+      cpu: 200m

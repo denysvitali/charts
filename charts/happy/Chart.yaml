@@ -1,0 +1,17 @@
+apiVersion: v2
+name: happy
+description: Happy Server - minimal backend for Claude Code clients
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/denysvitali/happy-server
+sources:
+  - https://github.com/denysvitali/happy-server
+  - https://github.com/denysvitali/happy
+keywords:
+  - happy
+  - claude
+  - backend
+maintainers:
+  - name: Denys Vitali
+    url: https://github.com/denysvitali
