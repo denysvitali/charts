@@ -105,19 +105,20 @@ jobs:
             # Find previous tag for this chart
             PREV_TAG=$(git tag -l "${chart_name}-*" --sort=-v:refname | head -n 1)
 
-            # Calculate next version using git-cliff
             if [ -n "$PREV_TAG" ]; then
-              # Extract version from tag (e.g., happy-0.1.0 -> 0.1.0)
-              PREV_VERSION="${PREV_TAG#${chart_name}-}"
-              echo "Previous version for $chart_name: $PREV_VERSION"
+              echo "Previous tag for $chart_name: $PREV_TAG"
 
-              # Use git-cliff to determine bump type and calculate next version
-              BUMP=$(git-cliff --config cliff.toml --include-path "charts/${chart_name}/**" --bump "$PREV_TAG..HEAD" 2>/dev/null | head -1)
-              if [ -z "$BUMP" ]; then
-                echo "No conventional commits found for $chart_name since $PREV_TAG"
-                continue
+              # Use git-cliff --bump to calculate next version
+              # --context outputs JSON with the calculated version without creating tags
+              NEXT_VERSION=$(git-cliff --config cliff.toml --include-path "charts/${chart_name}/**" --bump --context 2>/dev/null | jq -r '.[0].version' 2>/dev/null)
+
+              if [ -n "$NEXT_VERSION" ] && [ "$NEXT_VERSION" != "null" ]; then
+                NEW_VERSION="$NEXT_VERSION"
+                echo "git-cliff calculated version: $NEW_VERSION"
+              else
+                echo "ERROR: git-cliff could not calculate version for $chart_name"
+                exit 1
               fi
-              NEW_VERSION="$BUMP"
             else
               # First release - start at 0.1.0
               echo "No previous tag for $chart_name - starting at 0.1.0"
@@ -173,18 +174,19 @@ jobs:
             PREV_TAG=$(git tag -l "${chart_name}-*" --sort=-v:refname | head -n 1)
 
             # Generate changelog with git-cliff scoped to the chart's directory
+            # The --tag flag tells git-cliff which version this release represents
             CLIFF_ARGS=(
               --config cliff.toml
               --include-path "charts/${chart_name}/**"
               --strip header
+              --tag "$tag"
             )
 
             if [ -n "$PREV_TAG" ]; then
-              echo "Generating changelog from $PREV_TAG to HEAD"
-              CLIFF_ARGS+=(--tag "$tag" "$PREV_TAG..HEAD")
+              echo "Generating changelog from $PREV_TAG to $tag"
+              CLIFF_ARGS+=("$PREV_TAG..HEAD")
             else
-              echo "No previous tag found — generating full changelog"
-              CLIFF_ARGS+=(--tag "$tag")
+              echo "No previous tag found — generating full changelog for $tag"
             fi
 
             git-cliff "${CLIFF_ARGS[@]}" > "/tmp/changelogs/${chart_name}.md" 2>/dev/null || true
