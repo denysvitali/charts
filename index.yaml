@@ -1,0 +1,24 @@
+apiVersion: v1
+entries:
+  happy:
+  - apiVersion: v2
+    created: "2026-02-22T16:21:15.716372376Z"
+    description: Happy Server - minimal backend for Claude Code clients
+    digest: fdef47c18bd23f5c0c8b3e1ab5e7eb3ded0ffa44e2947e3877a52051410eb17f
+    home: https://github.com/denysvitali/happy-server
+    keywords:
+    - happy
+    - claude
+    - backend
+    maintainers:
+    - name: Denys Vitali
+      url: https://github.com/denysvitali
+    name: happy
+    sources:
+    - https://github.com/denysvitali/happy-server
+    - https://github.com/denysvitali/happy
+    type: application
+    urls:
+    - https://github.com/denysvitali/charts/releases/download/happy-0.0.0/happy-0.0.0.tgz
+    version: 0.0.0
+generated: "2026-02-22T16:21:15.716383186Z"
