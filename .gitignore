@@ -20,3 +20,5 @@ Thumbs.db
 
 # Rendered templates (local dev)
 /tmp/
+
+.claude/settings.local.json
