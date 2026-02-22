@@ -10,13 +10,14 @@ jobs:
     permissions:
       contents: write
     env:
-      CR_VERSION: "1.6.1"
+      CR_VERSION: "1.7.0"
       GIT_CLIFF_VERSION: "2.7.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history needed for git-cliff and tag comparison
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -27,6 +28,15 @@ jobs:
         uses: azure/setup-helm@v4
         with:
           version: v3.17.0
+
+      - name: Install yq
+        run: |
+          curl -sSLo /tmp/yq.tar.gz \
+            "https://github.com/mikefarah/yq/releases/download/v4.45.1/yq_linux_amd64.tar.gz"
+          tar -xzf /tmp/yq.tar.gz -C /tmp
+          sudo mv /tmp/yq_linux_amd64 /usr/local/bin/yq
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       - name: Install chart-releaser (cr)
         run: |
@@ -54,15 +64,23 @@ jobs:
             [ -f "$chart_yaml" ] || continue
 
             chart_name=$(yq e '.name' "$chart_yaml")
-            chart_version=$(yq e '.version' "$chart_yaml")
-            tag="${chart_name}-${chart_version}"
 
-            if git rev-parse "$tag" >/dev/null 2>&1; then
-              echo "Tag $tag already exists — skipping $chart_name"
-            else
-              echo "New release detected: $tag"
-              RELEASABLE="$RELEASABLE $chart_name"
+            # Check if there are commits since the last tag for this chart
+            PREV_TAG=$(git tag -l "${chart_name}-*" --sort=-v:refname | head -n 1)
+
+            if [ -n "$PREV_TAG" ]; then
+              # Check for commits since last tag
+              COMMITS=$(git log "$PREV_TAG..HEAD" --oneline -- "charts/$chart_name" 2>/dev/null | wc -l)
+              if [ "$COMMITS" -eq 0 ]; then
+                echo "No changes for $chart_name since $PREV_TAG — skipping"
+                continue
+              fi
+              echo "Found $COMMITS new commits for $chart_name"
             fi
+
+            # Chart is releasable
+            echo "Chart $chart_name will be released"
+            RELEASABLE="$RELEASABLE $chart_name"
           done
 
           RELEASABLE=$(echo "$RELEASABLE" | xargs)
@@ -74,6 +92,58 @@ jobs:
             echo "any_releasable=true" >> "$GITHUB_OUTPUT"
             echo "charts=$RELEASABLE" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Calculate chart versions
+        id: versions
+        if: steps.detect.outputs.any_releasable == 'true'
+        run: |
+          VERSIONS_JSON="{"
+          for chart_name in ${{ steps.detect.outputs.charts }}; do
+            chart_dir="charts/$chart_name"
+            chart_yaml="$chart_dir/Chart.yaml"
+
+            # Find previous tag for this chart
+            PREV_TAG=$(git tag -l "${chart_name}-*" --sort=-v:refname | head -n 1)
+
+            # Calculate next version using git-cliff
+            if [ -n "$PREV_TAG" ]; then
+              # Extract version from tag (e.g., happy-0.1.0 -> 0.1.0)
+              PREV_VERSION="${PREV_TAG#${chart_name}-}"
+              echo "Previous version for $chart_name: $PREV_VERSION"
+
+              # Use git-cliff to determine bump type and calculate next version
+              BUMP=$(git-cliff --config cliff.toml --include-path "charts/${chart_name}/**" --bump "$PREV_TAG..HEAD" 2>/dev/null | head -1)
+              if [ -z "$BUMP" ]; then
+                echo "No conventional commits found for $chart_name since $PREV_TAG"
+                continue
+              fi
+              NEW_VERSION="$BUMP"
+            else
+              # First release - start at 0.1.0
+              echo "No previous tag for $chart_name - starting at 0.1.0"
+              NEW_VERSION="0.1.0"
+            fi
+
+            echo "Calculated version for $chart_name: $NEW_VERSION"
+
+            # Update Chart.yaml with new version
+            yq e -i ".version = \"$NEW_VERSION\"" "$chart_yaml"
+
+            # Add to JSON output
+            [ "$VERSIONS_JSON" != "{" ] && VERSIONS_JSON="$VERSIONS_JSON,"
+            VERSIONS_JSON="$VERSIONS_JSON\"$chart_name\":\"$NEW_VERSION\""
+          done
+          VERSIONS_JSON="$VERSIONS_JSON}"
+
+          echo "versions_json=$VERSIONS_JSON" >> "$GITHUB_OUTPUT"
+          echo "Versions JSON: $VERSIONS_JSON"
+
+      - name: Commit version bumps
+        if: steps.detect.outputs.any_releasable == 'true'
+        run: |
+          git add charts/*/Chart.yaml
+          git commit -m "chore: bump chart versions for release [skip ci]" || true
+          git push origin main
 
       - name: Package charts and generate changelogs
         if: steps.detect.outputs.any_releasable == 'true'
@@ -173,11 +243,13 @@ jobs:
           OWNER=$(echo "${{ github.repository }}" | cut -d/ -f1)
           REPO=$(echo "${{ github.repository }}" | cut -d/ -f2)
 
+          # Create temp directory for index (avoid .cr-index which cr uses for worktree)
+          mkdir -p /tmp/cr-index
+
           cr index \
             --owner "$OWNER" \
             --git-repo "$REPO" \
-            --charts-repo "https://${OWNER}.github.io/${REPO}" \
             --pages-branch gh-pages \
             --package-path .cr-release-packages \
-            --index-path .cr-index/index.yaml \
+            --index-path /tmp/cr-index/index.yaml \
             --push
