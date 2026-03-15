@@ -1,0 +1,172 @@
+suite: network policies
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  # ---------------------------------------------------------------------------
+  # Conditional rendering
+  # ---------------------------------------------------------------------------
+  - it: should not render any policies when networkPolicy.enabled is false
+    set:
+      networkPolicy.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render only server policy when redis and ui are disabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: NetworkPolicy
+        documentIndex: 0
+
+  - it: should render server + redis policies when redis enabled and ui disabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: true
+      ui.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: should render server + ui policies when ui enabled and redis disabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: should render all three policies when redis and ui are enabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: true
+      ui.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  # ---------------------------------------------------------------------------
+  # Server policy details
+  # ---------------------------------------------------------------------------
+  - it: server policy should allow ingress on port 3000
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: false
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 3000
+        documentIndex: 0
+
+  - it: server policy should include UI ingress rule when ui enabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: true
+    asserts:
+      - equal:
+          path: spec.ingress[1].from[0].podSelector.matchLabels.[app.kubernetes.io/component]
+          value: ui
+        documentIndex: 0
+
+  - it: server policy should include redis egress when redis enabled
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: true
+      ui.enabled: false
+    asserts:
+      - contains:
+          path: spec.egress
+          content:
+            to:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: happy
+                    app.kubernetes.io/instance: RELEASE-NAME
+                    app.kubernetes.io/component: redis
+            ports:
+              - protocol: TCP
+                port: 6379
+        documentIndex: 0
+
+  - it: server policy should use custom namespace selector for ingress controller
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: false
+      networkPolicy.ingressController.namespaceSelector.matchLabels:
+        kubernetes.io/metadata.name: ingress-nginx
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels.[kubernetes.io/metadata.name]
+          value: ingress-nginx
+        documentIndex: 0
+
+  # ---------------------------------------------------------------------------
+  # Redis policy details
+  # ---------------------------------------------------------------------------
+  - it: redis policy should only allow ingress from server pods
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: true
+      ui.enabled: false
+    asserts:
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels.[app.kubernetes.io/component]
+          value: server
+        documentIndex: 1
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 6379
+        documentIndex: 1
+
+  - it: redis policy should only allow DNS egress
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: true
+      ui.enabled: false
+    asserts:
+      - equal:
+          path: spec.egress[0].ports[0].port
+          value: 53
+        documentIndex: 1
+      - lengthEqual:
+          path: spec.egress
+          count: 1
+        documentIndex: 1
+
+  # ---------------------------------------------------------------------------
+  # UI policy details
+  # ---------------------------------------------------------------------------
+  - it: ui policy should allow egress to server on port 3000
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: true
+    asserts:
+      - equal:
+          path: spec.egress[1].to[0].podSelector.matchLabels.[app.kubernetes.io/component]
+          value: server
+        documentIndex: 1
+      - equal:
+          path: spec.egress[1].ports[0].port
+          value: 3000
+        documentIndex: 1
+
+  - it: ui policy should allow ingress on port 80
+    set:
+      networkPolicy.enabled: true
+      redis.enabled: false
+      ui.enabled: true
+    asserts:
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 80
+        documentIndex: 1

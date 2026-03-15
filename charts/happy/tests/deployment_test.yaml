@@ -1,0 +1,264 @@
+suite: deployment
+templates:
+  - templates/deployment.yaml
+tests:
+  # ---------------------------------------------------------------------------
+  # DATABASE_URL resolution
+  # ---------------------------------------------------------------------------
+  - it: should use CloudNativePG secret when postgres is enabled
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "test-secret"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].valueFrom.secretKeyRef.key
+          value: uri
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].valueFrom.secretKeyRef.name
+          pattern: -postgres-app$
+      # init container gets the same source
+      - equal:
+          path: spec.template.spec.initContainers[0].env[0].valueFrom.secretKeyRef.key
+          value: uri
+
+  - it: should use inline URL when postgres disabled and externalDatabase.url set
+    set:
+      postgres.enabled: false
+      externalDatabase.url: "postgresql://ext:5432/db"
+      handyMasterSecret: "test-secret"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].value
+          value: "postgresql://ext:5432/db"
+      - equal:
+          path: spec.template.spec.initContainers[0].env[0].value
+          value: "postgresql://ext:5432/db"
+
+  - it: should use existingSecret for DATABASE_URL when postgres disabled and no inline URL
+    set:
+      postgres.enabled: false
+      existingSecret: "my-secret"
+      handyMasterSecret: "test-secret"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].valueFrom.secretKeyRef.name
+          value: my-secret
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].valueFrom.secretKeyRef.key
+          value: database_url
+
+  - it: should fall back to generated config secret name when no existingSecret
+    set:
+      postgres.enabled: false
+      existingSecret: ""
+      externalSecret.enabled: true
+      externalSecret.secretStoreRef.name: my-store
+      externalSecret.remotePath: happy/prod
+      handyMasterSecret: ""
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "DATABASE_URL")].valueFrom.secretKeyRef.name
+          pattern: -config$
+
+  # ---------------------------------------------------------------------------
+  # HANDY_MASTER_SECRET resolution
+  # ---------------------------------------------------------------------------
+  - it: should use inline master secret when provided
+    set:
+      handyMasterSecret: "inline-secret-value"
+      postgres.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "HANDY_MASTER_SECRET")].value
+          value: "inline-secret-value"
+
+  - it: should use existingSecret for master secret when no inline value
+    set:
+      handyMasterSecret: ""
+      existingSecret: "my-secret"
+      postgres.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "HANDY_MASTER_SECRET")].valueFrom.secretKeyRef.name
+          value: my-secret
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "HANDY_MASTER_SECRET")].valueFrom.secretKeyRef.key
+          value: handy_master_secret
+
+  # ---------------------------------------------------------------------------
+  # REDIS_URL resolution
+  # ---------------------------------------------------------------------------
+  - it: should point REDIS_URL to built-in redis service when redis enabled
+    set:
+      redis.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "REDIS_URL")].value
+          pattern: ^redis://.*-redis:6379$
+
+  - it: should use external redis URL when redis disabled and externalUrl set
+    set:
+      redis.enabled: false
+      redis.externalUrl: "redis://external-redis:6379"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "REDIS_URL")].value
+          value: "redis://external-redis:6379"
+
+  - it: should fall back to localhost redis when redis disabled and no externalUrl
+    set:
+      redis.enabled: false
+      redis.externalUrl: ""
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name == "REDIS_URL")].value
+          value: "redis://localhost:6379"
+
+  # ---------------------------------------------------------------------------
+  # S3 env vars
+  # ---------------------------------------------------------------------------
+  - it: should include S3 env vars when s3.host is set
+    set:
+      s3.host: "minio.example.com"
+      s3.port: "9000"
+      s3.useSSL: "false"
+      s3.bucket: "uploads"
+      s3.publicURL: "https://cdn.example.com"
+      s3.accessKey: "AKIA123"
+      s3.secretKey: "secret456"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_HOST
+            value: "minio.example.com"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_BUCKET
+            value: "uploads"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ACCESS_KEY
+            value: "AKIA123"
+
+  - it: should omit S3 env vars when s3.host is empty
+    set:
+      s3.host: ""
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_HOST
+          any: true
+
+  - it: should use existingSecret for S3 keys when inline keys empty
+    set:
+      s3.host: "minio.example.com"
+      s3.accessKey: ""
+      s3.secretKey: ""
+      existingSecret: "my-s3-secret"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: my-s3-secret
+                key: s3_access_key
+
+  # ---------------------------------------------------------------------------
+  # Security hardening
+  # ---------------------------------------------------------------------------
+  - it: should set automountServiceAccountToken to false
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: should mount /tmp as emptyDir
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
+
+  - it: should apply security context from values
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  # ---------------------------------------------------------------------------
+  # Probes
+  # ---------------------------------------------------------------------------
+  - it: should configure liveness and readiness probes on /healthz
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /healthz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /healthz
+
+  # ---------------------------------------------------------------------------
+  # Init container
+  # ---------------------------------------------------------------------------
+  - it: should have a prisma migrate init container
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: migrate
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value: ["npx", "prisma", "migrate", "deploy"]
+
+  # ---------------------------------------------------------------------------
+  # Extra env
+  # ---------------------------------------------------------------------------
+  - it: should include extraEnv variables
+    set:
+      postgres.enabled: true
+      handyMasterSecret: "s"
+      extraEnv:
+        - name: CUSTOM_VAR
+          value: "custom-value"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_VAR
+            value: "custom-value"

@@ -1,0 +1,85 @@
+suite: redis deployment
+templates:
+  - templates/redis-deployment.yaml
+tests:
+  - it: should create redis deployment when redis.enabled is true
+    set:
+      redis.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: metadata.name
+          pattern: -redis$
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: redis
+
+  - it: should not render when redis.enabled is false
+    set:
+      redis.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should use redis-specific security context overrides
+    set:
+      redis.enabled: true
+      redis.podSecurityContext:
+        runAsUser: 999
+        runAsGroup: 999
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 999
+      - equal:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 999
+
+  - it: should fall back to global security context when no redis override
+    set:
+      redis.enabled: true
+      redis.podSecurityContext: null
+      podSecurityContext:
+        runAsUser: 1000
+        runAsNonRoot: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 1000
+
+  - it: should use correct redis image
+    set:
+      redis.enabled: true
+      redis.image.repository: redis
+      redis.image.tag: 7-alpine
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "redis:7-alpine"
+
+  - it: should set automountServiceAccountToken to false
+    set:
+      redis.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: should mount /data as emptyDir
+    set:
+      redis.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: data
+            emptyDir: {}
+
+  - it: should have redis component label
+    set:
+      redis.enabled: true
+    asserts:
+      - equal:
+          path: metadata.labels.[app.kubernetes.io/component]
+          value: redis

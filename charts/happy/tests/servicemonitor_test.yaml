@@ -1,0 +1,46 @@
+suite: service monitor
+templates:
+  - templates/servicemonitor.yaml
+tests:
+  - it: should not render when serviceMonitor.enabled is false
+    set:
+      serviceMonitor.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render ServiceMonitor when enabled
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - isAPIVersion:
+          of: monitoring.coreos.com/v1
+
+  - it: should use configured scrape settings
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.path: /custom-metrics
+      serviceMonitor.interval: 15s
+      serviceMonitor.scrapeTimeout: 5s
+    asserts:
+      - equal:
+          path: spec.endpoints[0].path
+          value: /custom-metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 15s
+      - equal:
+          path: spec.endpoints[0].scrapeTimeout
+          value: 5s
+
+  - it: should include additional labels
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.additionalLabels:
+        prometheus: main
+    asserts:
+      - equal:
+          path: metadata.labels.prometheus
+          value: main

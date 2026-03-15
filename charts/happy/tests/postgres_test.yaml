@@ -1,0 +1,73 @@
+suite: postgres cluster
+templates:
+  - templates/postgres.yaml
+tests:
+  - it: should not render when postgres.enabled is false
+    set:
+      postgres.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render CloudNativePG Cluster when enabled
+    set:
+      postgres.enabled: true
+    asserts:
+      - isKind:
+          of: Cluster
+      - isAPIVersion:
+          of: postgresql.cnpg.io/v1
+
+  - it: should configure instances count
+    set:
+      postgres.enabled: true
+      postgres.instances: 3
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 3
+
+  - it: should configure storage size
+    set:
+      postgres.enabled: true
+      postgres.storageSize: 50Gi
+    asserts:
+      - equal:
+          path: spec.storage.size
+          value: 50Gi
+
+  - it: should set storage class when specified
+    set:
+      postgres.enabled: true
+      postgres.storageClass: premium-ssd
+    asserts:
+      - equal:
+          path: spec.storage.storageClass
+          value: premium-ssd
+
+  - it: should omit storage class when empty
+    set:
+      postgres.enabled: true
+      postgres.storageClass: ""
+    asserts:
+      - isNull:
+          path: spec.storage.storageClass
+
+  - it: should bootstrap with happy database owned by app
+    set:
+      postgres.enabled: true
+    asserts:
+      - equal:
+          path: spec.bootstrap.initdb.database
+          value: happy
+      - equal:
+          path: spec.bootstrap.initdb.owner
+          value: app
+
+  - it: should enable pod monitoring
+    set:
+      postgres.enabled: true
+    asserts:
+      - equal:
+          path: spec.monitoring.enablePodMonitor
+          value: true

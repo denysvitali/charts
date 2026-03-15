@@ -1,0 +1,84 @@
+suite: ui deployment
+templates:
+  - templates/ui-deployment.yaml
+tests:
+  - it: should create ui deployment when ui.enabled is true
+    set:
+      ui.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+      - matchRegex:
+          path: metadata.name
+          pattern: -ui$
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: ui
+
+  - it: should not render when ui.enabled is false
+    set:
+      ui.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should use ui-specific security context overrides
+    set:
+      ui.enabled: true
+      ui.podSecurityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 1000
+
+  - it: should fall back to global security context when no ui override
+    set:
+      ui.enabled: true
+      ui.podSecurityContext: null
+      podSecurityContext:
+        runAsUser: 5000
+        runAsNonRoot: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 5000
+
+  - it: should configure probes on / for the UI
+    set:
+      ui.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /
+
+  - it: should expose port 80
+    set:
+      ui.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 80
+
+  - it: should respect replicaCount
+    set:
+      ui.enabled: true
+      ui.replicaCount: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: should mount /tmp as emptyDir
+    set:
+      ui.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
