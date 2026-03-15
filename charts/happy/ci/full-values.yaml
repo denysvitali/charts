@@ -1,0 +1,67 @@
+# CI values overlay: all optional features enabled
+# Used to validate that every chart feature renders correctly together.
+
+replicaCount: 1
+
+postgres:
+  enabled: true
+  instances: 1
+  storageClass: ""
+  storageSize: 1Gi
+
+redis:
+  enabled: true
+
+ui:
+  enabled: true
+  replicaCount: 1
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+  hosts:
+    - host: happy.ci.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - happy.ci.example.com
+      secretName: happy-ci-tls
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ingress-nginx
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  scrapeTimeout: 10s
+  path: /metrics
+  additionalLabels:
+    prometheus: kube-prometheus
+
+serviceAccount:
+  create: true
+
+# Master secret provided directly for CI (no ExternalSecret needed)
+handyMasterSecret: "ci-full-test-master-secret"
+
+# S3 config for CI (fake values)
+s3:
+  host: "minio.ci.example.com"
+  port: "443"
+  useSSL: "true"
+  bucket: "happy-ci"
+  publicURL: "https://minio.ci.example.com/happy-ci"
+  accessKey: "ci-access-key"
+  secretKey: "ci-secret-key"

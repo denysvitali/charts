@@ -1,0 +1,31 @@
+# CI values overlay: absolute minimum configuration
+# All optional components disabled; only bare-minimum values provided.
+
+replicaCount: 1
+
+postgres:
+  enabled: false
+
+redis:
+  enabled: false
+
+ui:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+networkPolicy:
+  enabled: false
+
+externalSecret:
+  enabled: false
+
+# Provide a master secret and external database URL directly
+handyMasterSecret: "ci-minimal-master-secret"
+
+externalDatabase:
+  url: "postgresql://happy:password@external-db.ci.example.com:5432/happy"
+
+serviceAccount:
+  create: true
