@@ -26,13 +26,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.podSecurityContext }}
+      serviceAccountName: {{ include "happy.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with (.Values.ui.podSecurityContext | default .Values.podSecurityContext) }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: ui
-          {{- with .Values.securityContext }}
+          {{- with (.Values.ui.securityContext | default .Values.securityContext) }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
@@ -56,6 +58,12 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
