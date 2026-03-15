@@ -15,18 +15,19 @@ fullnameOverride: ""
 podAnnotations: {}
 podLabels: {}
 
-podSecurityContext: {}
-  # runAsNonRoot: true
-  # fsGroup: 1000
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
 
-securityContext: {}
-  # allowPrivilegeEscalation: false
-  # readOnlyRootFilesystem: true
-  # runAsNonRoot: true
-  # runAsUser: 1000
-  # capabilities:
-  #   drop:
-  #     - ALL
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
 
 service:
   type: ClusterIP
@@ -95,6 +96,23 @@ redis:
     limits:
       memory: 128Mi
 
+  podSecurityContext:
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
   # -- Use external Redis instead of built-in
   # Set redis.enabled=false and provide externalUrl
   externalUrl: ""
@@ -136,12 +154,46 @@ externalSecret:
   # -- Remote path in the secret store
   remotePath: ""
 
+serviceAccount:
+  # -- Specifies whether a service account should be created
+  create: true
+  # -- The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+  # -- Annotations to add to the service account
+  annotations: {}
+  automountServiceAccountToken: false
+
+networkPolicy:
+  # -- Enable NetworkPolicy resources
+  enabled: true
+  ingressController:
+    # -- Namespace selector for the ingress controller
+    namespaceSelector:
+      matchLabels: {}
+
 # -- Pod Disruption Budget
 podDisruptionBudget:
   enabled: true
   # Use maxUnavailable for single-replica deployments
   # minAvailable: 1  # Use for multi-replica
   maxUnavailable: 1
+
+# =============================================================================
+# Prometheus ServiceMonitor
+# =============================================================================
+
+serviceMonitor:
+  # -- Enable Prometheus Operator ServiceMonitor
+  enabled: false
+  # -- Scrape interval
+  interval: 30s
+  # -- Scrape timeout
+  scrapeTimeout: 10s
+  # -- Metrics path
+  path: /metrics
+  # -- Additional labels to add to the ServiceMonitor (e.g. to match a Prometheus instance selector)
+  additionalLabels: {}
 
 # =============================================================================
 # UI Configuration
@@ -164,3 +216,20 @@ ui:
     limits:
       memory: 128Mi
       cpu: 200m
+
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
