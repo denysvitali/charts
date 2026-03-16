@@ -1,0 +1,252 @@
+{{- if .Values.networkPolicy.enabled }}
+---
+# NetworkPolicy: server
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "happy.fullname" . }}-server
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "happy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller namespace
+    - from:
+        - namespaceSelector:
+            {{- if .Values.networkPolicy.ingressController.namespaceSelector.matchLabels }}
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector.matchLabels | nindent 14 }}
+            {{- else }}
+            matchLabels: {}
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 3000
+    {{- if .Values.ui.enabled }}
+    # Allow traffic from UI pods
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ui
+      ports:
+        - protocol: TCP
+          port: 3000
+    {{- end }}
+    {{- if .Values.smokeTest.enabled }}
+    # Allow traffic from smoke test pod
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: smoke-test
+      ports:
+        - protocol: TCP
+          port: 3000
+    {{- end }}
+  egress:
+    # Allow DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- if .Values.redis.enabled }}
+    # Allow egress to Redis pods
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    # Allow egress to PostgreSQL (CloudNativePG uses port 5432)
+    - ports:
+        - protocol: TCP
+          port: 5432
+    # Allow egress to the internet (S3 / external services) on common HTTPS/HTTP ports
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+{{- if .Values.redis.enabled }}
+---
+# NetworkPolicy: redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "happy.fullname" . }}-redis
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "happy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic only from server pods on Redis port
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- if .Values.smokeTest.enabled }}
+    # Allow traffic from smoke test pod
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: smoke-test
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+  egress:
+    # Allow DNS only
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}
+{{- if .Values.ui.enabled }}
+---
+# NetworkPolicy: ui
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "happy.fullname" . }}-ui
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "happy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ui
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller namespace
+    - from:
+        - namespaceSelector:
+            {{- if .Values.networkPolicy.ingressController.namespaceSelector.matchLabels }}
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector.matchLabels | nindent 14 }}
+            {{- else }}
+            matchLabels: {}
+            {{- end }}
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- if .Values.smokeTest.enabled }}
+    # Allow traffic from smoke test pod
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: smoke-test
+      ports:
+        - protocol: TCP
+          port: 80
+    {{- end }}
+  egress:
+    # Allow DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to server pods
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 3000
+{{- end }}
+{{- if .Values.smokeTest.enabled }}
+---
+# NetworkPolicy: smoke-test
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "happy.fullname" . }}-smoke-test
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "happy.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: smoke-test
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow egress to server pods
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - protocol: TCP
+          port: 3000
+    {{- if .Values.redis.enabled }}
+    # Allow egress to Redis pods
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    {{- if .Values.ui.enabled }}
+    # Allow egress to UI pods
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "happy.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: ui
+      ports:
+        - protocol: TCP
+          port: {{ .Values.ui.service.port }}
+    {{- end }}
+    {{- if .Values.postgres.enabled }}
+    # Allow egress to PostgreSQL
+    - ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    {{- if .Values.s3.host }}
+    # Allow egress to S3 endpoint
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.s3.port | int }}
+    {{- end }}
+{{- end }}
+{{- end }}

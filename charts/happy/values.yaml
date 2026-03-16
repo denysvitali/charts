@@ -164,6 +164,63 @@ serviceAccount:
   annotations: {}
   automountServiceAccountToken: false
 
+# =============================================================================
+# Upgrade Guard — Pre-flight & Post-upgrade Smoke Test Hooks
+# =============================================================================
+# Helm hook Jobs that gate every install and upgrade:
+#   • preflight (pre-install/pre-upgrade): validates live cluster dependencies
+#     (DB reachability, Redis TCP) before any manifest is applied.
+#   • upgradeSmoke (post-install/post-upgrade): polls the newly deployed server
+#     until it serves HTTP 200, or forces Helm — and any GitOps controller
+#     watching it (ArgoCD, Flux) — to mark the release as FAILED.
+#
+# This turns `helm upgrade` from a fire-and-forget manifest apply into a
+# safe, observable pipeline with hard pass/fail semantics at both ends.
+
+upgradeGuard:
+  # -- Master switch. Set to false to disable all upgrade guard Jobs entirely.
+  enabled: true
+
+  preflight:
+    # -- Run a pre-install/pre-upgrade Job that checks live cluster
+    # dependencies before any manifests are applied.
+    enabled: true
+    # -- Verify the database is reachable and accepting connections.
+    checkDatabase: true
+    # -- Verify Redis is reachable via TCP connect.
+    checkRedis: true
+    # -- Abort preflight if it has not completed within this many seconds.
+    timeoutSeconds: 120
+
+  upgradeSmoke:
+    # -- Run a post-install/post-upgrade Job that polls the happy-server
+    # Service. Helm marks the release FAILED if any probe does not
+    # return the expected HTTP status within the retry budget.
+    enabled: true
+    # -- URL paths to probe on the happy-server Service.
+    endpoints:
+      - path: /healthz
+    # -- Number of probe attempts per endpoint before declaring failure.
+    retries: 24
+    # -- Seconds to wait between retry attempts.
+    retryIntervalSeconds: 5
+    # -- Lightweight image used for HTTP probing (must have curl and sh).
+    image:
+      repository: curlimages/curl
+      tag: 8.7.1
+      pullPolicy: IfNotPresent
+
+  argocd:
+    # -- Emit argocd.argoproj.io/sync-wave annotations on hook Jobs and
+    # core workloads so ArgoCD processes resources in dependency order.
+    # Clusters without ArgoCD ignore these annotations harmlessly.
+    #   wave -1 : preflight gate
+    #   wave  0 : secrets, RBAC, NetworkPolicy, PDB
+    #   wave  1 : Redis, CloudNativePG Cluster
+    #   wave  5 : main server Deployment, Services, Ingress
+    #   wave 10 : post-upgrade smoke test
+    syncWaves: true
+
 networkPolicy:
   # -- Enable NetworkPolicy resources
   enabled: true
@@ -194,6 +251,24 @@ serviceMonitor:
   path: /metrics
   # -- Additional labels to add to the ServiceMonitor (e.g. to match a Prometheus instance selector)
   additionalLabels: {}
+
+# =============================================================================
+# Smoke Test (helm test)
+# =============================================================================
+
+smokeTest:
+  # -- Enable post-install smoke test Pod (runs via `helm test <release>`)
+  enabled: true
+  # -- Seconds each individual probe waits before timing out
+  timeoutSeconds: "10"
+  # -- When to delete the test Pod after completion
+  # Options: before-hook-creation,hook-succeeded,hook-failed
+  deletePolicy: before-hook-creation,hook-succeeded
+  image:
+    # -- Image used by the smoke test runner. Must have curl, nc (netcat), grep, sh.
+    repository: busybox
+    tag: "1.36"
+    pullPolicy: IfNotPresent
 
 # =============================================================================
 # UI Configuration

@@ -25,3 +25,7 @@ handyMasterSecret: "ci-test-secret"
 # Use an external database URL for CI
 externalDatabase:
   url: "postgresql://user:pass@localhost:5432/happy"
+
+# Smoke test is a helm test hook; disable in CI linting overlays
+smokeTest:
+  enabled: false

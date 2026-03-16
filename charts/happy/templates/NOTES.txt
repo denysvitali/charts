@@ -29,3 +29,20 @@ The UI is available via the {{ include "happy.fullname" . }}-ui service on port 
 
 PostgreSQL is managed by CloudNativePG ({{ include "happy.fullname" . }}-postgres).
 {{- end }}
+
+{{- if and .Values.upgradeGuard.enabled (or .Values.upgradeGuard.preflight.enabled .Values.upgradeGuard.upgradeSmoke.enabled) }}
+
+Upgrade Guard is active for this release:
+{{- if .Values.upgradeGuard.preflight.enabled }}
+  • Pre-flight:     runs BEFORE manifests are applied — validates DB and Redis reachability.
+    Logs: kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=preflight
+{{- end }}
+{{- if .Values.upgradeGuard.upgradeSmoke.enabled }}
+  • Upgrade smoke: runs AFTER Deployment rollout — polls{{ range .Values.upgradeGuard.upgradeSmoke.endpoints }} {{ .path }}{{ end }} until HTTP 200.
+    A non-200 response within the retry budget marks this release FAILED.
+    Logs: kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=upgrade-smoke
+{{- end }}
+
+For on-demand integration testing (all components), run:
+  $ helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}
+{{- end }}

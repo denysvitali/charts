@@ -6,6 +6,10 @@ metadata:
   labels:
     {{- include "happy.labels" . | nindent 4 }}
     app.kubernetes.io/component: redis
+  {{- if .Values.upgradeGuard.argocd.syncWaves }}
+  annotations:
+    "argocd.argoproj.io/sync-wave": "1"
+  {{- end }}
 spec:
   replicas: 1
   selector:

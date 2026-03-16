@@ -4,6 +4,10 @@ metadata:
   name: {{ include "happy.fullname" . }}
   labels:
     {{- include "happy.labels" . | nindent 4 }}
+  {{- if .Values.upgradeGuard.argocd.syncWaves }}
+  annotations:
+    "argocd.argoproj.io/sync-wave": "5"
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:

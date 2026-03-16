@@ -1,0 +1,88 @@
+{{- if and .Values.upgradeGuard.enabled .Values.upgradeGuard.upgradeSmoke.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "happy.fullname" . }}-upgrade-smoke
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: upgrade-smoke
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- if .Values.upgradeGuard.argocd.syncWaves }}
+    "argocd.argoproj.io/sync-wave": "10"
+    {{- end }}
+spec:
+  activeDeadlineSeconds: {{ add (mul .Values.upgradeGuard.upgradeSmoke.retries .Values.upgradeGuard.upgradeSmoke.retryIntervalSeconds) 30 }}
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "happy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: upgrade-smoke
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: upgrade-smoke
+          image: "{{ .Values.upgradeGuard.upgradeSmoke.image.repository }}:{{ .Values.upgradeGuard.upgradeSmoke.image.tag }}"
+          imagePullPolicy: {{ .Values.upgradeGuard.upgradeSmoke.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              TARGET="http://{{ include "happy.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}"
+              RETRIES={{ .Values.upgradeGuard.upgradeSmoke.retries }}
+              INTERVAL={{ .Values.upgradeGuard.upgradeSmoke.retryIntervalSeconds }}
+              OVERALL_PASS=true
+
+              echo "=== Happy upgrade smoke tests against ${TARGET} ==="
+
+              for endpoint in {{ range .Values.upgradeGuard.upgradeSmoke.endpoints }}{{ .path }} {{ end }}; do
+                echo "--- Probing ${TARGET}${endpoint} ---"
+                i=0
+                PASS=false
+                while [ $i -lt $RETRIES ]; do
+                  STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${TARGET}${endpoint}" 2>/dev/null || echo "000")
+                  if [ "$STATUS" = "200" ]; then
+                    echo "[OK] ${endpoint} -> HTTP 200"
+                    PASS=true
+                    break
+                  fi
+                  echo "  attempt $((i+1))/${RETRIES}: HTTP ${STATUS} — retrying in ${INTERVAL}s..."
+                  sleep "${INTERVAL}"
+                  i=$((i+1))
+                done
+                if [ "$PASS" = "false" ]; then
+                  echo "[FAIL] ${endpoint} did not return HTTP 200 after ${RETRIES} attempts"
+                  OVERALL_PASS=false
+                fi
+              done
+
+              if [ "$OVERALL_PASS" = "false" ]; then
+                echo ""
+                echo "=== UPGRADE SMOKE TEST FAILED — Helm will mark this release as FAILED ==="
+                echo "  Diagnose: kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/component=server --tail=50"
+                exit 1
+              fi
+
+              echo ""
+              echo "=== All upgrade smoke tests passed ==="
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 32Mi
+{{- end }}

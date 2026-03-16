@@ -5,6 +5,10 @@ metadata:
   name: {{ include "happy.fullname" . }}-postgres
   labels:
     {{- include "happy.labels" . | nindent 4 }}
+  {{- if .Values.upgradeGuard.argocd.syncWaves }}
+  annotations:
+    "argocd.argoproj.io/sync-wave": "1"
+  {{- end }}
 spec:
   instances: {{ .Values.postgres.instances }}
   primaryUpdateStrategy: unsupervised

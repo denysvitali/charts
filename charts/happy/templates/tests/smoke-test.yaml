@@ -1,0 +1,243 @@
+{{- if .Values.smokeTest.enabled }}
+---
+# ConfigMap: smoke test script
+# All test logic lives here so the Pod stays a plain busybox/curl image with
+# no custom build required — making it easy to pin, audit, and replace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "happy.fullname" . }}-smoke-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: smoke-test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  run.sh: |
+    #!/bin/sh
+    # ---------------------------------------------------------------------------
+    # Happy Server — post-install smoke test
+    # Exits 0 only when every enabled check passes.
+    # Results are written as newline-delimited JSON to stdout so they can be
+    # captured by CI or a log aggregator.
+    # ---------------------------------------------------------------------------
+    set -eu
+
+    PASS=0
+    FAIL=0
+    RESULTS=""
+
+    # ── helpers ────────────────────────────────────────────────────────────────
+
+    ts() { date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown"; }
+
+    emit() {
+      # emit <name> <status: pass|fail> <message>
+      line="{\"time\":\"$(ts)\",\"check\":\"$1\",\"status\":\"$2\",\"message\":\"$3\"}"
+      echo "$line"
+      RESULTS="${RESULTS}${line}\n"
+      if [ "$2" = "pass" ]; then
+        PASS=$((PASS + 1))
+      else
+        FAIL=$((FAIL + 1))
+      fi
+    }
+
+    http_check() {
+      # http_check <label> <url> <expected_status> [grep_body_pattern]
+      label="$1"
+      url="$2"
+      expected="$3"
+      pattern="${4:-}"
+
+      resp=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
+               --max-time "${SMOKE_TIMEOUT_SECONDS}" \
+               --retry 3 --retry-delay 2 \
+               "$url" 2>/tmp/curl_err.txt) || true
+
+      if [ "$resp" = "$expected" ]; then
+        if [ -n "$pattern" ]; then
+          if grep -q "$pattern" /tmp/body.txt 2>/dev/null; then
+            emit "$label" "pass" "HTTP $resp body matches /$pattern/"
+          else
+            body=$(cat /tmp/body.txt 2>/dev/null | head -c 200 | tr '\n' ' ')
+            emit "$label" "fail" "HTTP $resp but body did not match /$pattern/: $body"
+          fi
+        else
+          emit "$label" "pass" "HTTP $resp"
+        fi
+      else
+        err=$(cat /tmp/curl_err.txt 2>/dev/null | head -c 200 | tr '\n' ' ')
+        body=$(cat /tmp/body.txt 2>/dev/null | head -c 200 | tr '\n' ' ')
+        emit "$label" "fail" "expected HTTP $expected got $resp. err=$err body=$body"
+      fi
+    }
+
+    tcp_check() {
+      # tcp_check <label> <host> <port>
+      label="$1"
+      host="$2"
+      port="$3"
+      if nc -z -w "${SMOKE_TIMEOUT_SECONDS}" "$host" "$port" 2>/dev/null; then
+        emit "$label" "pass" "TCP $host:$port reachable"
+      else
+        emit "$label" "fail" "TCP $host:$port unreachable"
+      fi
+    }
+
+    # ── 1. Server /healthz ─────────────────────────────────────────────────────
+    SERVER_URL="http://${HAPPY_SERVICE_HOST}:${HAPPY_SERVICE_PORT}"
+    http_check "server.healthz" "${SERVER_URL}/healthz" "200" "ok\|healthy\|status"
+
+    # ── 2. Server /metrics reachable (if ServiceMonitor enabled) ───────────────
+    {{- if .Values.serviceMonitor.enabled }}
+    http_check "server.metrics" "${SERVER_URL}{{ .Values.serviceMonitor.path }}" "200"
+    {{- end }}
+
+    # ── 3. Redis ping (if built-in Redis enabled) ──────────────────────────────
+    {{- if .Values.redis.enabled }}
+    REDIS_HOST="{{ include "happy.fullname" . }}-redis"
+    REDIS_PORT="6379"
+    tcp_check "redis.tcp" "${REDIS_HOST}" "${REDIS_PORT}"
+
+    # Send a PING command via raw TCP. Redis responds with "+PONG\r\n".
+    if echo "PING" | nc -w "${SMOKE_TIMEOUT_SECONDS}" "${REDIS_HOST}" "${REDIS_PORT}" \
+         2>/dev/null | grep -q "PONG"; then
+      emit "redis.ping" "pass" "PONG received"
+    else
+      emit "redis.ping" "fail" "no PONG response from ${REDIS_HOST}:${REDIS_PORT}"
+    fi
+
+    # Write + read round-trip using the Redis inline protocol.
+    KEY="smoke-test-$(date +%s)"
+    SET_CMD="*3\r\n\$3\r\nSET\r\n\$${#KEY}\r\n${KEY}\r\n\$2\r\nok\r\n"
+    GET_CMD="*2\r\n\$3\r\nGET\r\n\$${#KEY}\r\n${KEY}\r\n"
+    DEL_CMD="*2\r\n\$3\r\nDEL\r\n\$${#KEY}\r\n${KEY}\r\n"
+    set_resp=$(printf "${SET_CMD}" | nc -w "${SMOKE_TIMEOUT_SECONDS}" "${REDIS_HOST}" "${REDIS_PORT}" 2>/dev/null || true)
+    get_resp=$(printf "${GET_CMD}" | nc -w "${SMOKE_TIMEOUT_SECONDS}" "${REDIS_HOST}" "${REDIS_PORT}" 2>/dev/null || true)
+    printf "${DEL_CMD}" | nc -w "${SMOKE_TIMEOUT_SECONDS}" "${REDIS_HOST}" "${REDIS_PORT}" > /dev/null 2>&1 || true
+
+    if echo "$get_resp" | grep -q "ok"; then
+      emit "redis.readwrite" "pass" "SET/GET round-trip succeeded"
+    else
+      emit "redis.readwrite" "fail" "SET/GET round-trip failed (SET=$set_resp GET=$get_resp)"
+    fi
+    {{- end }}
+
+    # ── 4. UI health check (if UI enabled) ────────────────────────────────────
+    {{- if .Values.ui.enabled }}
+    UI_URL="http://{{ include "happy.fullname" . }}-ui:{{ .Values.ui.service.port }}"
+    http_check "ui.root" "${UI_URL}/" "200"
+    {{- end }}
+
+    # ── 5. S3 endpoint reachability (if configured) ───────────────────────────
+    {{- if .Values.s3.host }}
+    S3_SCHEME="{{ ternary "https" "http" (eq .Values.s3.useSSL "true") }}"
+    S3_URL="${S3_SCHEME}://{{ .Values.s3.host }}:{{ .Values.s3.port }}/"
+    # We just verify the endpoint responds — a 403 is fine (bucket exists, auth
+    # is checked); what matters is the host is reachable and TLS terminates.
+    s3_code=$(curl -s -o /dev/null -w "%{http_code}" \
+                --max-time "${SMOKE_TIMEOUT_SECONDS}" \
+                "${S3_URL}" 2>/dev/null || echo "000")
+    if [ "$s3_code" != "000" ]; then
+      emit "s3.reachable" "pass" "S3 endpoint responded with HTTP $s3_code"
+    else
+      emit "s3.reachable" "fail" "S3 endpoint ${S3_URL} unreachable (curl returned 000)"
+    fi
+    {{- end }}
+
+    # ── 6. PostgreSQL TCP reachability ────────────────────────────────────────
+    {{- if .Values.postgres.enabled }}
+    PG_HOST="{{ include "happy.fullname" . }}-postgres-rw"
+    tcp_check "postgres.tcp" "${PG_HOST}" "5432"
+    {{- end }}
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    TOTAL=$((PASS + FAIL))
+    echo "{\"time\":\"$(ts)\",\"summary\":{\"total\":${TOTAL},\"pass\":${PASS},\"fail\":${FAIL}}}"
+
+    if [ "$FAIL" -gt 0 ]; then
+      echo "SMOKE TEST FAILED: ${FAIL}/${TOTAL} checks failed." >&2
+      exit 1
+    else
+      echo "SMOKE TEST PASSED: ${PASS}/${TOTAL} checks passed." >&2
+      exit 0
+    fi
+
+---
+# Pod: smoke test runner
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "happy.fullname" . }}-smoke-test
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: smoke-test
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": {{ .Values.smokeTest.deletePolicy }}
+spec:
+  restartPolicy: Never
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  serviceAccountName: {{ include "happy.serviceAccountName" . }}
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: smoke
+      image: "{{ .Values.smokeTest.image.repository }}:{{ .Values.smokeTest.image.tag }}"
+      imagePullPolicy: {{ .Values.smokeTest.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop:
+            - ALL
+      command: ["sh", "/scripts/run.sh"]
+      env:
+        - name: SMOKE_TIMEOUT_SECONDS
+          value: {{ .Values.smokeTest.timeoutSeconds | quote }}
+        - name: HAPPY_SERVICE_HOST
+          value: "{{ include "happy.fullname" . }}"
+        - name: HAPPY_SERVICE_PORT
+          value: {{ .Values.service.port | quote }}
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      resources:
+        requests:
+          cpu: 10m
+          memory: 32Mi
+        limits:
+          memory: 64Mi
+  volumes:
+    - name: scripts
+      configMap:
+        name: {{ include "happy.fullname" . }}-smoke-test
+        defaultMode: 0555
+    - name: tmp
+      emptyDir: {}
+  {{- with .Values.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.tolerations }}
+  tolerations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,325 @@
+suite: smoke test
+templates:
+  - templates/tests/smoke-test.yaml
+tests:
+  # ---------------------------------------------------------------------------
+  # Conditional rendering
+  # ---------------------------------------------------------------------------
+  - it: should render ConfigMap and Pod when smokeTest.enabled is true
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: should not render anything when smokeTest.enabled is false
+    set:
+      smokeTest.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # ---------------------------------------------------------------------------
+  # Helm hook annotations
+  # ---------------------------------------------------------------------------
+  - it: ConfigMap should carry helm test hook annotation
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: test
+        documentIndex: 0
+
+  - it: Pod should carry helm test hook annotation
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: test
+        documentIndex: 1
+
+  # ---------------------------------------------------------------------------
+  # Pod spec correctness
+  # ---------------------------------------------------------------------------
+  - it: Pod should use Never restart policy
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.restartPolicy
+          value: Never
+        documentIndex: 1
+
+  - it: Pod should run as non-root user 65534
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.securityContext.runAsNonRoot
+          value: true
+        documentIndex: 1
+      - equal:
+          path: spec.securityContext.runAsUser
+          value: 65534
+        documentIndex: 1
+
+  - it: Pod should not automount service account token
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.automountServiceAccountToken
+          value: false
+        documentIndex: 1
+
+  - it: Pod should mount scripts volume from ConfigMap
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.volumes
+          content:
+            name: scripts
+            configMap:
+              name: RELEASE-NAME-happy-smoke-test
+              defaultMode: 0555
+        documentIndex: 1
+
+  - it: Pod should mount a tmp emptyDir
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.volumes
+          content:
+            name: tmp
+            emptyDir: {}
+        documentIndex: 1
+
+  - it: container should use configured image
+    set:
+      smokeTest.enabled: true
+      smokeTest.image.repository: busybox
+      smokeTest.image.tag: "1.36"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.containers[0].image
+          value: "busybox:1.36"
+        documentIndex: 1
+
+  - it: container should have readOnlyRootFilesystem
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+        documentIndex: 1
+
+  - it: container should drop ALL capabilities
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+        documentIndex: 1
+
+  # ---------------------------------------------------------------------------
+  # Environment variables
+  # ---------------------------------------------------------------------------
+  - it: should set HAPPY_SERVICE_HOST to the release service name
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.containers[0].env
+          content:
+            name: HAPPY_SERVICE_HOST
+            value: RELEASE-NAME-happy
+        documentIndex: 1
+
+  - it: should set HAPPY_SERVICE_PORT from service.port
+    set:
+      smokeTest.enabled: true
+      service.port: 8080
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.containers[0].env
+          content:
+            name: HAPPY_SERVICE_PORT
+            value: "8080"
+        documentIndex: 1
+
+  - it: should set SMOKE_TIMEOUT_SECONDS from smokeTest.timeoutSeconds
+    set:
+      smokeTest.enabled: true
+      smokeTest.timeoutSeconds: "30"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.containers[0].env
+          content:
+            name: SMOKE_TIMEOUT_SECONDS
+            value: "30"
+        documentIndex: 1
+
+  # ---------------------------------------------------------------------------
+  # Script content: conditional checks included or excluded
+  # ---------------------------------------------------------------------------
+  - it: script should include redis check when redis enabled
+    set:
+      smokeTest.enabled: true
+      redis.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: data["run.sh"]
+          pattern: redis\.ping
+        documentIndex: 0
+
+  - it: script should not include redis check when redis disabled
+    set:
+      smokeTest.enabled: true
+      redis.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - notMatchRegex:
+          path: data["run.sh"]
+          pattern: redis\.ping
+        documentIndex: 0
+
+  - it: script should include UI check when ui enabled
+    set:
+      smokeTest.enabled: true
+      ui.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: data["run.sh"]
+          pattern: ui\.root
+        documentIndex: 0
+
+  - it: script should not include UI check when ui disabled
+    set:
+      smokeTest.enabled: true
+      ui.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - notMatchRegex:
+          path: data["run.sh"]
+          pattern: ui\.root
+        documentIndex: 0
+
+  - it: script should include S3 check when s3.host is set
+    set:
+      smokeTest.enabled: true
+      s3.host: "minio.example.com"
+      s3.port: "443"
+      s3.useSSL: "true"
+      s3.bucket: "b"
+      s3.accessKey: "k"
+      s3.secretKey: "s"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: data["run.sh"]
+          pattern: s3\.reachable
+        documentIndex: 0
+
+  - it: script should not include S3 check when s3.host is empty
+    set:
+      smokeTest.enabled: true
+      s3.host: ""
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - notMatchRegex:
+          path: data["run.sh"]
+          pattern: s3\.reachable
+        documentIndex: 0
+
+  - it: script should include postgres TCP check when postgres enabled
+    set:
+      smokeTest.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: data["run.sh"]
+          pattern: postgres\.tcp
+        documentIndex: 0
+
+  - it: script should include serviceMonitor metrics check when serviceMonitor enabled
+    set:
+      smokeTest.enabled: true
+      serviceMonitor.enabled: true
+      serviceMonitor.path: /metrics
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - matchRegex:
+          path: data["run.sh"]
+          pattern: server\.metrics
+        documentIndex: 0
+
+  - it: script should not include serviceMonitor metrics check when serviceMonitor disabled
+    set:
+      smokeTest.enabled: true
+      serviceMonitor.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - notMatchRegex:
+          path: data["run.sh"]
+          pattern: server\.metrics
+        documentIndex: 0
+
+  # ---------------------------------------------------------------------------
+  # delete policy
+  # ---------------------------------------------------------------------------
+  - it: Pod should respect custom deletePolicy
+    set:
+      smokeTest.enabled: true
+      smokeTest.deletePolicy: "before-hook-creation"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 1

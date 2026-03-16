@@ -1,0 +1,586 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Happy Helm Chart Values",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of happy-server replicas"
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string" },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      },
+      "required": ["repository", "tag", "pullPolicy"],
+      "additionalProperties": false
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "podLabels": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "podSecurityContext": {
+      "type": "object"
+    },
+    "securityContext": {
+      "type": "object"
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      },
+      "required": ["type", "port"],
+      "additionalProperties": false
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "host": { "type": "string" },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": { "type": "string" },
+                    "pathType": {
+                      "type": "string",
+                      "enum": ["Prefix", "Exact", "ImplementationSpecific"]
+                    }
+                  },
+                  "required": ["path", "pathType"],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": ["host", "paths"],
+            "additionalProperties": false
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hosts": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "secretName": { "type": "string" }
+            },
+            "required": ["hosts", "secretName"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "object",
+          "properties": {
+            "memory": { "type": "string" },
+            "cpu": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "memory": { "type": "string" },
+            "cpu": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "extraEnv": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" },
+          "valueFrom": { "type": "object" }
+        },
+        "required": ["name"]
+      }
+    },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "tolerations": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "postgres": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "instances": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "storageClass": { "type": "string" },
+        "storageSize": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E|m)?$",
+          "description": "Kubernetes storage quantity (e.g. 10Gi, 500Mi)"
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "externalDatabase": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "redis": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"]
+            }
+          },
+          "required": ["repository", "tag", "pullPolicy"],
+          "additionalProperties": false
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "memory": { "type": "string" },
+                "cpu": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "memory": { "type": "string" },
+                "cpu": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "podSecurityContext": { "type": "object" },
+        "securityContext": { "type": "object" },
+        "externalUrl": { "type": "string" }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "s3": {
+      "type": "object",
+      "properties": {
+        "host": { "type": "string" },
+        "port": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "Port as a string (used directly as env var)"
+        },
+        "useSSL": {
+          "type": "string",
+          "enum": ["true", "false"],
+          "description": "SSL flag as a string (used directly as env var)"
+        },
+        "bucket": { "type": "string" },
+        "publicURL": { "type": "string" },
+        "accessKey": { "type": "string" },
+        "secretKey": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "handyMasterSecret": { "type": "string" },
+    "existingSecret": { "type": "string" },
+    "externalSecret": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "refreshInterval": { "type": "string" },
+        "secretStoreRef": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "kind": {
+              "type": "string",
+              "enum": ["SecretStore", "ClusterSecretStore"]
+            }
+          },
+          "required": ["name", "kind"],
+          "additionalProperties": false
+        },
+        "remotePath": { "type": "string" }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxUnavailable": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "automountServiceAccountToken": { "type": "boolean" }
+      },
+      "required": ["create"],
+      "additionalProperties": false
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressController": {
+          "type": "object",
+          "properties": {
+            "namespaceSelector": {
+              "type": "object",
+              "properties": {
+                "matchLabels": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "smokeTest": {
+      "type": "object",
+      "description": "Configuration for the on-demand helm test Pod (run via `helm test <release>`)",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "timeoutSeconds": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "deletePolicy": { "type": "string" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"]
+            }
+          },
+          "required": ["repository", "tag", "pullPolicy"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "upgradeGuard": {
+      "type": "object",
+      "description": "Helm hook Jobs that gate every install/upgrade with a pre-flight check and a post-upgrade smoke test. A failed smoke test causes Helm and GitOps controllers (ArgoCD/Flux) to mark the release as FAILED.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "preflight": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "checkDatabase": { "type": "boolean" },
+            "checkRedis": { "type": "boolean" },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 600
+            }
+          },
+          "required": ["enabled"],
+          "additionalProperties": false
+        },
+        "upgradeSmoke": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "endpoints": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^/"
+                  }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+              }
+            },
+            "retries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 120
+            },
+            "retryIntervalSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 60
+            },
+            "image": {
+              "type": "object",
+              "properties": {
+                "repository": { "type": "string" },
+                "tag": { "type": "string" },
+                "pullPolicy": {
+                  "type": "string",
+                  "enum": ["Always", "IfNotPresent", "Never"]
+                }
+              },
+              "required": ["repository", "tag", "pullPolicy"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["enabled"],
+          "additionalProperties": false
+        },
+        "argocd": {
+          "type": "object",
+          "properties": {
+            "syncWaves": { "type": "boolean" }
+          },
+          "required": ["syncWaves"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": {
+              "type": "string",
+              "enum": ["Always", "IfNotPresent", "Never"]
+            }
+          },
+          "required": ["repository", "tag", "pullPolicy"],
+          "additionalProperties": false
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "required": ["type", "port"],
+          "additionalProperties": false
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "requests": {
+              "type": "object",
+              "properties": {
+                "memory": { "type": "string" },
+                "cpu": { "type": "string" }
+              },
+              "additionalProperties": false
+            },
+            "limits": {
+              "type": "object",
+              "properties": {
+                "memory": { "type": "string" },
+                "cpu": { "type": "string" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "podSecurityContext": { "type": "object" },
+        "securityContext": { "type": "object" }
+      },
+      "required": ["enabled"],
+      "additionalProperties": false
+    }
+  },
+  "if": {
+    "properties": {
+      "postgres": {
+        "properties": {
+          "enabled": { "const": false }
+        },
+        "required": ["enabled"]
+      }
+    },
+    "required": ["postgres"]
+  },
+  "then": {
+    "anyOf": [
+      {
+        "properties": {
+          "externalDatabase": {
+            "properties": {
+              "url": { "type": "string", "minLength": 1 }
+            },
+            "required": ["url"]
+          }
+        },
+        "required": ["externalDatabase"]
+      },
+      {
+        "properties": {
+          "existingSecret": { "type": "string", "minLength": 1 }
+        },
+        "required": ["existingSecret"]
+      },
+      {
+        "properties": {
+          "externalSecret": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          }
+        },
+        "required": ["externalSecret"]
+      }
+    ]
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "externalSecret": {
+            "properties": {
+              "enabled": { "const": true }
+            },
+            "required": ["enabled"]
+          }
+        },
+        "required": ["externalSecret"]
+      },
+      "then": {
+        "properties": {
+          "externalSecret": {
+            "properties": {
+              "secretStoreRef": {
+                "properties": {
+                  "name": { "type": "string", "minLength": 1 }
+                },
+                "required": ["name"]
+              },
+              "remotePath": { "type": "string", "minLength": 1 }
+            },
+            "required": ["secretStoreRef", "remotePath"]
+          }
+        },
+        "required": ["externalSecret"]
+      }
+    }
+  ]
+}

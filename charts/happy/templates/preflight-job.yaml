@@ -1,0 +1,125 @@
+{{- if and .Values.upgradeGuard.enabled .Values.upgradeGuard.preflight.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "happy.fullname" . }}-preflight
+  labels:
+    {{- include "happy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preflight
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- if .Values.upgradeGuard.argocd.syncWaves }}
+    "argocd.argoproj.io/sync-wave": "-1"
+    {{- end }}
+spec:
+  activeDeadlineSeconds: {{ .Values.upgradeGuard.preflight.timeoutSeconds }}
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "happy.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: preflight
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "happy.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: preflight
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              echo "=== Happy preflight checks ==="
+
+              {{- if .Values.upgradeGuard.preflight.checkDatabase }}
+              echo "[DB] Checking database connectivity..."
+              node -e "
+                const { Client } = require('pg');
+                const c = new Client({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10000 });
+                c.connect()
+                  .then(() => c.query('SELECT 1'))
+                  .then(() => { console.log('[DB] OK'); c.end(); process.exit(0); })
+                  .catch(e => { console.error('[DB] FAILED:', e.message); process.exit(1); });
+              "
+              {{- end }}
+
+              {{- if .Values.upgradeGuard.preflight.checkRedis }}
+              echo "[Redis] Checking Redis connectivity..."
+              node -e "
+                const net = require('net');
+                const url = process.env.REDIS_URL || 'redis://localhost:6379';
+                const stripped = url.replace(/^redis:\/\//, '');
+                const parts = stripped.split(':');
+                const host = parts[0] || 'localhost';
+                const port = parseInt(parts[1]) || 6379;
+                const s = net.createConnection(port, host, () => {
+                  console.log('[Redis] OK (TCP connected to ' + host + ':' + port + ')');
+                  s.destroy();
+                  process.exit(0);
+                });
+                s.on('error', e => { console.error('[Redis] FAILED:', e.message); process.exit(1); });
+                setTimeout(() => { console.error('[Redis] TIMEOUT'); process.exit(1); }, 8000);
+              "
+              {{- end }}
+
+              echo "=== All preflight checks passed ==="
+          env:
+            {{- if .Values.upgradeGuard.preflight.checkDatabase }}
+            - name: DATABASE_URL
+              {{- if .Values.postgres.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "happy.fullname" . }}-postgres-app
+                  key: uri
+              {{- else if .Values.externalDatabase.url }}
+              value: {{ .Values.externalDatabase.url | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.existingSecret | default (printf "%s-config" (include "happy.fullname" .)) }}
+                  key: database_url
+            {{- end }}
+            {{- end }}
+            {{- if .Values.upgradeGuard.preflight.checkRedis }}
+            - name: REDIS_URL
+              {{- if .Values.redis.enabled }}
+              value: "redis://{{ include "happy.fullname" . }}-redis:6379"
+              {{- else if .Values.redis.externalUrl }}
+              value: {{ .Values.redis.externalUrl | quote }}
+              {{- else }}
+              value: "redis://localhost:6379"
+              {{- end }}
+            {{- end }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
