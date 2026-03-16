@@ -5,6 +5,7 @@ tests:
   - it: should not render when postgres.enabled is false
     set:
       postgres.enabled: false
+      externalDatabase.url: "postgresql://user:pass@db:5432/happy"
     asserts:
       - hasDocuments:
           count: 0

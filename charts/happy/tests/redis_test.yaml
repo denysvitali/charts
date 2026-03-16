@@ -81,5 +81,5 @@ tests:
       redis.enabled: true
     asserts:
       - equal:
-          path: metadata.labels.[app.kubernetes.io/component]
+          path: metadata.labels["app.kubernetes.io/component"]
           value: redis

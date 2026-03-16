@@ -1,0 +1,565 @@
+suite: upgrade guard
+templates:
+  - templates/preflight-job.yaml
+  - templates/smoketest-job.yaml
+  - templates/deployment.yaml
+  - templates/redis-deployment.yaml
+  - templates/postgres.yaml
+
+# ---------------------------------------------------------------------------
+# Master switch: disabling upgradeGuard suppresses all guard jobs
+# ---------------------------------------------------------------------------
+tests:
+  - it: should not render preflight job when upgradeGuard.enabled is false
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should not render upgrade-smoke job when upgradeGuard.enabled is false
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: preflight job renders one document when both jobs are enabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: upgrade-smoke job renders one document when both jobs are enabled
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - hasDocuments:
+          count: 1
+
+# ---------------------------------------------------------------------------
+# Preflight Job tests (only preflight template scoped)
+# ---------------------------------------------------------------------------
+  - it: preflight job should have pre-install and pre-upgrade hook
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+
+  - it: preflight job should have negative hook weight for early execution
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+
+  - it: preflight job should clean up on success
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: preflight job should emit sync-wave -1 when syncWaves enabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.argocd.syncWaves: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "-1"
+
+  - it: preflight job should not emit sync-wave when syncWaves disabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.argocd.syncWaves: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - isNull:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+
+  - it: preflight job should have backoffLimit 0
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+
+  - it: preflight job should honour timeoutSeconds in activeDeadlineSeconds
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.preflight.timeoutSeconds: 90
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 90
+
+  - it: preflight job template should use Never restart policy
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+
+  - it: preflight job should run as non-root
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+
+  - it: preflight job container should drop ALL capabilities
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: preflight job container should use readOnlyRootFilesystem
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: preflight job should carry preflight component label
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: preflight
+
+  - it: preflight job should not automount service account token
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: preflight job should mount DATABASE_URL from cnpg secret when postgres enabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.preflight.checkDatabase: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL
+            valueFrom:
+              secretKeyRef:
+                name: RELEASE-NAME-happy-postgres-app
+                key: uri
+
+  - it: preflight job should include REDIS_URL when redis enabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.preflight.checkRedis: true
+      redis.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_URL
+            value: "redis://RELEASE-NAME-happy-redis:6379"
+
+  - it: preflight job should use external redis URL when redis disabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+      upgradeGuard.preflight.checkRedis: true
+      redis.enabled: false
+      redis.externalUrl: "redis://external-redis:6379"
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_URL
+            value: "redis://external-redis:6379"
+
+  - it: preflight job should not render when preflight disabled
+    templates:
+      - templates/preflight-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+# ---------------------------------------------------------------------------
+# Upgrade Smoke Job tests
+# ---------------------------------------------------------------------------
+  - it: upgrade-smoke job should have post-install and post-upgrade hook
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: upgrade-smoke job should have positive hook weight for post-deployment execution
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+
+  - it: upgrade-smoke job should clean up on success
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: upgrade-smoke job should emit sync-wave 10 when syncWaves enabled
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      upgradeGuard.argocd.syncWaves: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "10"
+
+  - it: upgrade-smoke job should not emit sync-wave when syncWaves disabled
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      upgradeGuard.argocd.syncWaves: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - isNull:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+
+  - it: upgrade-smoke job should have backoffLimit 0
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+
+  - it: upgrade-smoke job activeDeadlineSeconds should be retries times interval plus buffer
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      upgradeGuard.upgradeSmoke.retries: 10
+      upgradeGuard.upgradeSmoke.retryIntervalSeconds: 5
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 80
+
+  - it: upgrade-smoke job template should use Never restart policy
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+
+  - it: upgrade-smoke job should run as user 65534
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+
+  - it: upgrade-smoke job container should use configured curl image
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      upgradeGuard.upgradeSmoke.image.repository: curlimages/curl
+      upgradeGuard.upgradeSmoke.image.tag: 8.7.1
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: "curlimages/curl:8.7.1"
+
+  - it: upgrade-smoke job container should drop ALL capabilities
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: upgrade-smoke job container should use readOnlyRootFilesystem
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: upgrade-smoke job should carry upgrade-smoke component label
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.preflight.enabled: false
+      upgradeGuard.upgradeSmoke.enabled: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: upgrade-smoke
+
+  - it: upgrade-smoke job should not render when upgradeSmoke disabled
+    templates:
+      - templates/smoketest-job.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.upgradeSmoke.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+# ---------------------------------------------------------------------------
+# ArgoCD sync-wave on core workloads
+# ---------------------------------------------------------------------------
+  - it: server deployment should carry sync-wave 5 when syncWaves enabled
+    templates:
+      - templates/deployment.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.argocd.syncWaves: true
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "5"
+
+  - it: redis deployment should carry sync-wave 1 when syncWaves enabled
+    templates:
+      - templates/redis-deployment.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.argocd.syncWaves: true
+      redis.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "1"
+
+  - it: postgres cluster should carry sync-wave 1 when syncWaves enabled
+    templates:
+      - templates/postgres.yaml
+    set:
+      upgradeGuard.enabled: true
+      upgradeGuard.argocd.syncWaves: true
+      postgres.enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]
+          value: "1"
+
+  - it: server deployment should not carry sync-wave when syncWaves disabled
+    templates:
+      - templates/deployment.yaml
+    set:
+      upgradeGuard.enabled: false
+      upgradeGuard.argocd.syncWaves: false
+      postgres.enabled: true
+      handyMasterSecret: "s"
+    asserts:
+      - isNull:
+          path: metadata.annotations["argocd.argoproj.io/sync-wave"]

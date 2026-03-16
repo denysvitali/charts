@@ -69,7 +69,7 @@ tests:
               pathType: Prefix
     asserts:
       - equal:
-          path: metadata.annotations.[nginx.ingress.kubernetes.io/ssl-redirect]
+          path: metadata.annotations["nginx.ingress.kubernetes.io/ssl-redirect"]
           value: "true"
 
   - it: should use service port for backend
